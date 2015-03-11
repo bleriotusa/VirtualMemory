@@ -17,6 +17,8 @@ class VirtualMemoryTest(unittest.TestCase):
         self.bitmap.set_bit(1)
         self.assertEqual(self.bitmap.bitmap, 2 ** 1023 + 2 ** 1022)
 
+        self.bitmap.show_bitmap()
+
     def test_addPT(self):
         print(' **** TESTING test_{} ******'.format("addPT"))
         print(self.mem.PM[0:512])
@@ -28,3 +30,7 @@ class VirtualMemoryTest(unittest.TestCase):
         self.assertEqual(self.mem.bitmap.to_string()[frame_loc], str(1))
         self.assertEqual(self.mem.bitmap.to_string()[frame_loc+1], str(1))
 
+    def test_search_free_frame(self):
+        print(' **** TESTING test_{} ******'.format("search_free_frame"))
+        print('First Free Frame', self.mem.search_free_frame(True))
+        self.assertEquals(self.mem.search_free_frame(True), 512)

@@ -1,7 +1,10 @@
 __author__ = 'Michael'
 
+from unittest import TestCase
+
 FRAMESIZE = 512
 TOTALFRAMES = 1024
+TOTALWORDS = FRAMESIZE * TOTALFRAMES
 
 
 def accepts(*types):
@@ -25,7 +28,7 @@ class BitMap():
     Initializes a bitmap with the first bit set to 1
     """
 
-    def __init__(self, bits: int):
+    def __init__(self, bits=TOTALFRAMES):
         """
         :param bits: number of bits you want to have in bitmap
         :return: None
@@ -46,6 +49,21 @@ class BitMap():
         string = "{:b}".format(self.bitmap)
         print(string)
 
+    def search_free_bit(self, consecutive):
+        """
+        Searches for a free n consecutive # of frames together and returns the index
+        n = 2 if conseq is True else 1
+        :param consecutive: Condition for which you want 2 consecutive frames or 1
+        :return: index of the first frame found
+        """
+
+        n = 1 if bool else 0
+        bit_string = "{:b}".format(self.bitmap)
+        for frame in range(len(bit_string)):
+            if bit_string[frame] == 0 and bit_string[frame + n] == 0:
+                return frame
+
+
 
 class PMemory:
     """
@@ -57,6 +75,23 @@ class PMemory:
         self.PM = [0] * (FRAMESIZE * TOTALFRAMES)  # 512 words (integers) for each of the 1024 frames
         self.bitmap = BitMap(TOTALFRAMES)
 
+    def set_page(self, p: int, s: int, f: int):
+        """
+        Sets an uninitialized frame to be a page.
+        :param p: page # within page table
+        :param s: segment #
+        :param f: frame address (word/int address in int array)
+        :return: None
+        """
+        try:
+            TestCase().assertLess(p, FRAMESIZE * 2)
+            TestCase().assertLess(s, FRAMESIZE)
+            TestCase().assertLess(f, TOTALWORDS)
+        except AssertionError:
+            print('error')
+
+
+
     # @accepts(PMemory, int, int)
     def set_PT(self, s: int, f: int):
         """
@@ -66,19 +101,39 @@ class PMemory:
                 - setting specified frame pages to all 0s
                 - allocating the bitmap
         :param s: segment number
-        :param f: page table address (not frame # but should be multiple of 512 to indicate start of frame)
+        :param f: page table address (not frame # but word #. should be multiple of 512 to indicate start of frame)
         :return: None
         """
-        # Integer Array operations
+        try:
+            TestCase().assertLess(s, FRAMESIZE)
+            TestCase().assertLess(f, TOTALWORDS)
+        except AssertionError:
+            print('error')
+
+        # PM operations (of the main INT array)
+        # 1. set segment # to the PT address given
+        # 2. allocate the frames
         self.PM[s] = f
-        for i in range(f, f + 2*FRAMESIZE):
+        for i in range(f, f + 2 * FRAMESIZE):
             self.PM[i] = 0
 
 
-        # Bitmap operations
+        # Bitmap operations - set the appropriate bit to be set
         frame_num = int(f / FRAMESIZE)
         self.bitmap.set_bit(frame_num)
         self.bitmap.set_bit(frame_num + 1)
 
+    def search_free_frame(self, conseq: bool) -> int:
+        """
+        Searches for a free n consecutive # of frames together and returns the index
+        n = 2 if conseq is True else 1
+        :param conseq: Condition for which you want 2 consecutive frames or 1
+        :return: index of the first frame found
+        """
+        n = 1 if bool else 0
+
+        for frame in range(512, TOTALWORDS, 512):
+            if self.PM[frame] == 0 and self.PM[frame + n] == 0:
+                return frame
 
 
