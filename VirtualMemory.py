@@ -57,11 +57,13 @@ class BitMap():
         :return: index of the first frame found
         """
 
-        n = 1 if bool else 0
+        n = 1 if consecutive else 0
         bit_string = "{:b}".format(self.bitmap)
         for frame in range(len(bit_string)):
             if bit_string[frame] == '0' and bit_string[frame + n] == '0':
                 return frame
+
+        print("NO SLOT FOUND")
 
     def search_free_frame(self, consecutive):
         return 512 * self.search_free_bit(consecutive)
@@ -78,6 +80,69 @@ class VA:
         self.s = int(va_string[:9], 2)
         self.p = int(va_string[9:19], 2)
         self.w = int(va_string[19:], 2)
+
+        self.va_string = va_string
+
+    def get_sp(self):
+        return int(self.va_string[:19], 2)
+
+
+class TLB:
+    class BufferSlot:
+        def __init__(self, LRU: int, sp: int, f: int):
+            self.LRU = LRU
+            self.sp = sp
+            self.f = f
+
+    def __init__(self):
+        self.tlb = [TLB.BufferSlot(0, -1000, -1000) for i in range(0, 4)]
+
+    def search_sp(self, sp):
+        for slot in self.tlb:
+            if slot.sp == sp:
+                return slot
+
+    def search_lru(self, lru):
+        for slot in self.tlb:
+            if slot.LRU == lru:
+                return slot
+        print("no such lru value: {}".format(lru))
+
+    def lookup(self, sp):
+        """
+        :param sp: s and p bitstrings combined to int
+        :return: f # held by TLB slot with sp if hit, or None if miss
+        """
+        target_slot = self.search_sp(sp)
+        if target_slot:
+            f = target_slot.f
+            # decrement other values
+            for slot in self.tlb:
+                if slot.LRU > target_slot.LRU:
+                    slot.LRU -= 1
+            # set just used LRU to 3
+            target_slot.LRU = 3
+
+            # print('hit')
+            return target_slot.f
+
+        else:
+            # print('miss')
+            return None
+
+    def update(self, sp: int, f: int):
+        assert type(sp) == int and type(f) == int
+
+        target_slot = self.search_lru(0)
+        target_slot.LRU = 3
+        target_slot.sp = sp
+        target_slot.f = f
+
+        # decrement all other values by 1
+        for slot in self.tlb:
+            if slot.sp != target_slot.sp and slot.LRU > 0:
+                slot.LRU -= 1
+
 
 
 class PMemory:
@@ -107,6 +172,7 @@ class PMemory:
         # 2. allocate the page
         for i in range(f, f + FRAMESIZE):
             self.PM[i] = 0
+        return f
 
     def set_page(self, p: int, s: int, f: int):
         """
@@ -121,7 +187,7 @@ class PMemory:
             TestCase().assertLess(s, FRAMESIZE)
             TestCase().assertLess(f, TOTALWORDS)
         except AssertionError as e:
-            print('error', e, {'p':p, 's':s, 'f':f})
+            print('error', e, {'p': p, 's': s, 'f': f})
             return 'err'
 
         # PM operations (of the main INT array)
@@ -135,8 +201,7 @@ class PMemory:
         print('PM[{}] is now {}'.format(self.PM[s] + p, f))
 
     def add_PT(self, s: int) -> int:
-        f = self.bitmap.search_free_bit(True)
-        f *= 512
+        f = self.bitmap.search_free_frame(True)
         self.set_PT(s, f)
         # 2. allocate the frames
         for i in range(f, f + 2 * FRAMESIZE):
@@ -166,7 +231,6 @@ class PMemory:
         # 1. set segment # to the PT address given
         self.PM[s] = f
         if f != -1:
-
             # Bitmap operations - set the appropriate bit to be set
             frame_num = int(f / FRAMESIZE)
             self.bitmap.set_bit(frame_num)
@@ -193,8 +257,12 @@ class VMemSystem:
     System for managing the Physical Memory Representation (driver)
     """
 
-    def __init__(self, seg_setup_ints: [(int, int)], pt_setup_ints: [(int, int, int)]):
+    def __init__(self, seg_setup_ints: [(int, int)], pt_setup_ints: [(int, int, int)], use_tlb: bool):
         self.PM = PMemory(seg_setup_ints, pt_setup_ints)
+
+        self.use_tlb = use_tlb
+        if use_tlb:
+            self.tlb = TLB()
 
     def read(self, va):
         vaddress = VA(va)
@@ -202,34 +270,35 @@ class VMemSystem:
         p = vaddress.p
         w = vaddress.w
 
+        if self.use_tlb:
+            f = self.tlb.lookup(vaddress.get_sp())
+            if f: # then hit
+                print('hit')
+                output_file.write('h ')
+                return f + w
+
         PM = self.PM.PM
-        print('reading from {} + {} = {}, got {}'.format(PM[s], p,PM[s] + p , PM[PM[s] + p]))
+        print('reading from {} + {} = {}, got {}'.format(PM[s], p, PM[s] + p, PM[PM[s] + p]))
 
-        # if PM[s] == -1:
-        #     return 'pf'
-        #
-        # elif PM[s] == 0:
-        #     return 'err'
-        #
-        # if PM[PM[s] + p] == -1:
-        #     return 'pf'
-        #
-        # elif PM[PM[s] + p] == 0:
-        #     return 'err'
-
-        if PM[s] == -1 or PM[PM[s] + p] == -1:
-            # print('page fault')
+        if PM[s] == -1:
             return 'pf'
 
-        elif PM[s] == 0 or PM[PM[s] + p] == 0:
-            # if PM[s] == 0:
-            #     print('no such PT')
-            #     return
-            # elif PM[PM[s] + p] == 0:
-            #     print('no such page')
+        elif PM[s] == 0:
+            return 'err'
+
+        if PM[PM[s] + p] == -1:
+            return 'pf'
+
+        elif PM[PM[s] + p] == 0:
             return 'err'
 
         PA = PM[PM[s] + p] + w
+
+        if self.use_tlb:
+            self.tlb.update(vaddress.get_sp(), PA - w)
+            print('miss')
+            output_file.write('m ')
+
         # print(PA)
         return PA
 
@@ -239,18 +308,35 @@ class VMemSystem:
         p = vaddress.p
         w = vaddress.w
 
+        if self.use_tlb:
+            f = self.tlb.lookup(vaddress.get_sp())
+            if f: # then hit
+                print('hit')
+                output_file.write('h ')
+                return f + w
+
         PM = self.PM.PM
-        print('writing to {} + {} = {}, got {}'.format(PM[s], p,PM[s] + p, PM[PM[s] + p]))
-        if PM[s] == -1 or PM[PM[s] + p] == -1:
+
+        if PM[s] == -1:
             return 'pf'
 
         elif PM[s] == 0:
             self.PM.add_PT(s)
 
+        if PM[PM[s] + p] == -1:
+            return 'pf'
+
         elif PM[PM[s] + p] == 0:
-            self.PM.add_page(s, p)
+            self.PM.add_page(p, s)
+
+        print('writing to {} + {} = {}, got {}'.format(PM[s], p, PM[s] + p, PM[PM[s] + p]))
 
         PA = PM[PM[s] + p] + w
+
+        if self.use_tlb:
+            self.tlb.update(vaddress.get_sp(), PA - w)
+            print('miss')
+            output_file.write('m ')
         # print(PA)
         return PA
 
@@ -274,10 +360,11 @@ def parse_triples(l: [int]) -> [(int, int, int)]:
 
 
 if __name__ == '__main__':
+    TLB_ON = True
     test_num = 2
     setup_filename = 'tests/input{}_{}.txt'.format(test_num, 1)
     command_filename = 'tests/input{}_{}.txt'.format(test_num, 2)
-    output_filename = 'tests/myoutput{}_{}.txt'.format(test_num, 1)
+    output_filename = 'tests/myoutput{}_{}.txt'.format(test_num, 1 if not TLB_ON else 2)
 
     setup_file = open(setup_filename)
     command_file = open(command_filename)
@@ -299,7 +386,7 @@ if __name__ == '__main__':
     # print(pt_setup_ints)
 
     # END init parsing
-    vm = VMemSystem(seg_setup_ints, pt_setup_ints)
+    vm = VMemSystem(seg_setup_ints, pt_setup_ints, TLB_ON)
 
     cf = command_file.readline()
     command_list = list(map(lambda x: int(x), cf.strip().split(' ')))

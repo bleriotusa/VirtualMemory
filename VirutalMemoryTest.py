@@ -63,3 +63,8 @@ class VirtualMemoryTest(unittest.TestCase):
         print(self.va.s)
         print(self.va.p)
         print(self.va.w)
+
+    def test_TLB(self):
+        tlb = TLB()
+        for slot in tlb.tlb:
+            print(slot.LRU, slot.sp, slot.f)
