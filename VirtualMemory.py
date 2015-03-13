@@ -60,9 +60,24 @@ class BitMap():
         n = 1 if bool else 0
         bit_string = "{:b}".format(self.bitmap)
         for frame in range(len(bit_string)):
-            if bit_string[frame] == 0 and bit_string[frame + n] == 0:
+            if bit_string[frame] == '0' and bit_string[frame + n] == '0':
                 return frame
 
+    def search_free_frame(self, consecutive):
+        return 512 * self.search_free_bit(consecutive)
+
+
+class VA:
+    """
+    Takes in an INT as the virtual address and creates a Virtual Address object
+    :param va: virtual address in integer form
+    """
+
+    def __init__(self, va: int):
+        va_string = format(va, '032b')[4:]
+        self.s = int(va_string[:9], 2)
+        self.p = int(va_string[9:19], 2)
+        self.w = int(va_string[19:], 2)
 
 
 class PMemory:
@@ -71,9 +86,27 @@ class PMemory:
     Implemented as a flat array of integers
     """
 
-    def __init__(self):
+    def __init__(self, seg_setup_ints: [(int, int)]=[], pt_setup_ints: [(int, int, int)]=[]):
         self.PM = [0] * (FRAMESIZE * TOTALFRAMES)  # 512 words (integers) for each of the 1024 frames
         self.bitmap = BitMap(TOTALFRAMES)
+
+        for tup in seg_setup_ints:
+            s = tup[0]
+            f = tup[1]
+            self.set_PT(s, f)
+
+        for tup in pt_setup_ints:
+            p = tup[0]
+            s = tup[1]
+            f = tup[2]
+            self.set_page(p, s, f)
+
+    def add_page(self, p: int, s: int):
+        f = self.bitmap.search_free_frame(False)
+        self.set_page(p, s, f)
+        # 2. allocate the page
+        for i in range(f, f + FRAMESIZE):
+            self.PM[i] = 0
 
     def set_page(self, p: int, s: int, f: int):
         """
@@ -87,10 +120,28 @@ class PMemory:
             TestCase().assertLess(p, FRAMESIZE * 2)
             TestCase().assertLess(s, FRAMESIZE)
             TestCase().assertLess(f, TOTALWORDS)
-        except AssertionError:
-            print('error')
+        except AssertionError as e:
+            print('error', e, {'p':p, 's':s, 'f':f})
+            return 'err'
 
+        # PM operations (of the main INT array)
+        # 1. set page # given by PM[PM[s] + p] to the page address given
+        self.PM[self.PM[s] + p] = f
+        if f != -1:
+            # Bitmap operations - set the appropriate bit to be set
+            frame_num = int(f / FRAMESIZE)
+            self.bitmap.set_bit(frame_num)
 
+        print('PM[{}] is now {}'.format(self.PM[s] + p, f))
+
+    def add_PT(self, s: int) -> int:
+        f = self.bitmap.search_free_bit(True)
+        f *= 512
+        self.set_PT(s, f)
+        # 2. allocate the frames
+        for i in range(f, f + 2 * FRAMESIZE):
+            self.PM[i] = 0
+        return f
 
     # @accepts(PMemory, int, int)
     def set_PT(self, s: int, f: int):
@@ -108,20 +159,20 @@ class PMemory:
             TestCase().assertLess(s, FRAMESIZE)
             TestCase().assertLess(f, TOTALWORDS)
         except AssertionError:
-            print('error')
+            print('error', AssertionError)
+            return
 
         # PM operations (of the main INT array)
         # 1. set segment # to the PT address given
-        # 2. allocate the frames
         self.PM[s] = f
-        for i in range(f, f + 2 * FRAMESIZE):
-            self.PM[i] = 0
+        if f != -1:
 
+            # Bitmap operations - set the appropriate bit to be set
+            frame_num = int(f / FRAMESIZE)
+            self.bitmap.set_bit(frame_num)
+            self.bitmap.set_bit(frame_num + 1)
 
-        # Bitmap operations - set the appropriate bit to be set
-        frame_num = int(f / FRAMESIZE)
-        self.bitmap.set_bit(frame_num)
-        self.bitmap.set_bit(frame_num + 1)
+        print('PM[{}] is now {}'.format(s, f))
 
     def search_free_frame(self, conseq: bool) -> int:
         """
@@ -137,3 +188,132 @@ class PMemory:
                 return frame
 
 
+class VMemSystem:
+    """
+    System for managing the Physical Memory Representation (driver)
+    """
+
+    def __init__(self, seg_setup_ints: [(int, int)], pt_setup_ints: [(int, int, int)]):
+        self.PM = PMemory(seg_setup_ints, pt_setup_ints)
+
+    def read(self, va):
+        vaddress = VA(va)
+        s = vaddress.s
+        p = vaddress.p
+        w = vaddress.w
+
+        PM = self.PM.PM
+        print('reading from {} + {} = {}, got {}'.format(PM[s], p,PM[s] + p , PM[PM[s] + p]))
+
+        # if PM[s] == -1:
+        #     return 'pf'
+        #
+        # elif PM[s] == 0:
+        #     return 'err'
+        #
+        # if PM[PM[s] + p] == -1:
+        #     return 'pf'
+        #
+        # elif PM[PM[s] + p] == 0:
+        #     return 'err'
+
+        if PM[s] == -1 or PM[PM[s] + p] == -1:
+            # print('page fault')
+            return 'pf'
+
+        elif PM[s] == 0 or PM[PM[s] + p] == 0:
+            # if PM[s] == 0:
+            #     print('no such PT')
+            #     return
+            # elif PM[PM[s] + p] == 0:
+            #     print('no such page')
+            return 'err'
+
+        PA = PM[PM[s] + p] + w
+        # print(PA)
+        return PA
+
+    def write(self, va):
+        vaddress = VA(va)
+        s = vaddress.s
+        p = vaddress.p
+        w = vaddress.w
+
+        PM = self.PM.PM
+        print('writing to {} + {} = {}, got {}'.format(PM[s], p,PM[s] + p, PM[PM[s] + p]))
+        if PM[s] == -1 or PM[PM[s] + p] == -1:
+            return 'pf'
+
+        elif PM[s] == 0:
+            self.PM.add_PT(s)
+
+        elif PM[PM[s] + p] == 0:
+            self.PM.add_page(s, p)
+
+        PA = PM[PM[s] + p] + w
+        # print(PA)
+        return PA
+
+
+def parse_doubles(l: [int]) -> [(int, int)]:
+    tuples = []
+    for i in range(0, len(l), 2):
+        s = l[i]
+        f = l[i + 1]
+        tuples.append((s, f))
+
+    return tuples
+
+
+def parse_triples(l: [int]) -> [(int, int, int)]:
+    tuples = []
+    for i in range(0, len(l), 3):
+        tuples.append((l[i], l[i + 1], l[i + 2]))
+
+    return tuples
+
+
+if __name__ == '__main__':
+    test_num = 2
+    setup_filename = 'tests/input{}_{}.txt'.format(test_num, 1)
+    command_filename = 'tests/input{}_{}.txt'.format(test_num, 2)
+    output_filename = 'tests/myoutput{}_{}.txt'.format(test_num, 1)
+
+    setup_file = open(setup_filename)
+    command_file = open(command_filename)
+    output_file = open(output_filename, 'w+')
+
+    # retrieve a list of lists, where each list is an array of the ints in the file
+    setup_commands = []
+    line = True
+    while True:
+        line = setup_file.readline()
+        if line == '':
+            break
+        setup_commands.append(map(lambda x: int(x), line.split(' ')))
+
+    seg_setup_ints = parse_doubles(list(setup_commands[0]))
+    pt_setup_ints = parse_triples(list(setup_commands[1]))
+
+    # print(seg_setup_ints)
+    # print(pt_setup_ints)
+
+    # END init parsing
+    vm = VMemSystem(seg_setup_ints, pt_setup_ints)
+
+    cf = command_file.readline()
+    command_list = list(map(lambda x: int(x), cf.strip().split(' ')))
+    command_tups = parse_doubles(command_list)
+    # print(command_tups)
+
+    for t in command_tups:
+        if t[0] == 0:
+            out = str(vm.read(t[1]))
+            output_file.write(out)
+        else:
+            out = str(vm.write(t[1]))
+            output_file.write(out)
+
+        output_file.write(' ')
+
+    output_file.close()
